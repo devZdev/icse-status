@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "icse-status",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-18",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./public",
+    "not_found_handling": "single-page-application"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "STATUS_KV",
+      "id": "00000000000000000000000000000000",
+      "preview_id": "00000000000000000000000000000000"
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "status.securityexcellence.net",
+      "custom_domain": true
+    }
+  ]
+}
+

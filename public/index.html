@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>ICSE Status</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">ICSE Status</p>
+          <h1>Service status</h1>
+        </div>
+        <button id="refresh-button" class="icon-button" type="button" title="Refresh status" aria-label="Refresh status">
+          <span aria-hidden="true">Refresh</span>
+        </button>
+      </header>
+
+      <main class="status-layout">
+        <section class="summary-panel" aria-labelledby="overall-heading">
+          <div class="summary-copy">
+            <p class="section-label">Current state</p>
+            <h2 id="overall-heading">Loading</h2>
+            <p id="summary-detail">Fetching the latest check results.</p>
+          </div>
+          <div id="overall-badge" class="overall-badge is-unknown">Unknown</div>
+        </section>
+
+        <section id="stale-warning" class="notice" hidden>
+          Status data is stale. The scheduled Worker may not have run recently.
+        </section>
+
+        <section id="config-issues" class="notice notice-warn" hidden>
+          <h2>Configuration issues</h2>
+          <ul id="config-issues-list"></ul>
+        </section>
+
+        <section class="content-grid">
+          <div class="services-panel">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Monitored endpoints</p>
+                <h2>Services</h2>
+              </div>
+              <p id="last-updated" class="muted">Last updated: --</p>
+            </div>
+            <div id="services-list" class="services-list" aria-live="polite"></div>
+          </div>
+
+          <aside class="history-panel" aria-labelledby="history-heading">
+            <div class="section-heading">
+              <div>
+                <p class="section-label">Recent changes</p>
+                <h2 id="history-heading">History</h2>
+              </div>
+            </div>
+            <ol id="history-list" class="history-list"></ol>
+          </aside>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
+

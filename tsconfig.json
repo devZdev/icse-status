@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "types": ["@cloudflare/workers-types", "node"],
+    "lib": ["ESNext"]
+  },
+  "include": ["src/**/*.ts", "config/**/*.json", "vitest.config.ts"]
+}
