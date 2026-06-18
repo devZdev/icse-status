@@ -1,5 +1,13 @@
 {
   "$schema": "./services.schema.json",
-  "services": []
+  "services": [
+    {
+      "id": "securityexcellence-net",
+      "name": "Security Excellence",
+      "group": "Websites",
+      "url": "https://securityexcellence.net/",
+      "description": "Primary public website",
+      "timeoutMs": 8000
+    }
+  ]
 }
-

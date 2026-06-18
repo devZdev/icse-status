@@ -20,6 +20,10 @@ export const DEFAULT_TIMEOUT_MS = 8000;
 export const MAX_HISTORY_EVENTS = 100;
 export const STALE_AFTER_MS = 10 * 60 * 1000;
 export const DEFAULT_CONCURRENCY = 6;
+export const CHECK_REQUEST_HEADERS = {
+  accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+  "user-agent": "ICSE-Status/0.1 (+https://status.securityexcellence.net)"
+};
 
 type FetchFunction = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -116,6 +120,7 @@ export async function checkService(
   try {
     const response = await fetcher(service.url, {
       method: "GET",
+      headers: CHECK_REQUEST_HEADERS,
       redirect: "follow",
       signal: controller.signal
     });

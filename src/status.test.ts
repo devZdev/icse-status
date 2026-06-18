@@ -3,6 +3,7 @@ import {
   aggregateStatus,
   buildSummary,
   buildUnknownSnapshot,
+  CHECK_REQUEST_HEADERS,
   checkService,
   deriveStatusEvents,
   parseServicesConfig,
@@ -73,6 +74,14 @@ describe("checkService", () => {
       status: "operational",
       statusCode: 302
     });
+    expect(fetcher).toHaveBeenCalledWith(
+      service.url,
+      expect.objectContaining({
+        headers: CHECK_REQUEST_HEADERS,
+        method: "GET",
+        redirect: "follow"
+      })
+    );
   });
 
   it("treats 4xx and 5xx responses as outages", async () => {
