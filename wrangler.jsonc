@@ -12,7 +12,7 @@
     "not_found_handling": "single-page-application"
   },
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["*/15 * * * *"]
   },
   "kv_namespaces": [
     {
