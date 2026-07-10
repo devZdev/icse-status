@@ -7,7 +7,7 @@ The project is one Worker deployment:
 
 - Worker static assets serve the public page from `public/`.
 - API routes expose current status and recent changes.
-- A Cron Trigger runs every 5 minutes.
+- A Cron Trigger runs every 15 minutes.
 - Workers KV stores the latest snapshot and a rolling history list.
 
 Project safety rules for agents and maintainers:
@@ -66,6 +66,9 @@ Rules:
 - HTTP `2xx` and `3xx` responses are healthy.
 - HTTP `4xx`, `5xx`, timeouts, and network failures are outages.
 - `timeoutMs` is optional and must be between `1000` and `30000`.
+- `checkType` is optional and defaults to `http`. Use `statusPage` for a
+  provider using the standard Statuspage API, or `incidentIoHtml` for a
+  LearnWorlds/Incident.io page whose status data is embedded in its HTML.
 - Keep `id` stable once a service has been deployed; changing it makes the app
   treat the endpoint as a different service in history.
 
@@ -101,6 +104,8 @@ Checklist for each new service:
 - Use a unique lowercase `id` with letters, digits, and hyphens.
 - Use the same `group` for related services so the UI clusters them.
 - Use the public URL that best represents user-facing availability.
+- For a Statuspage provider, use the public status page URL and set
+  `checkType` to `statusPage`.
 - Omit `timeoutMs` unless the endpoint needs a custom timeout.
 - Run `npm run check`, start local Wrangler, trigger the scheduled handler, and
   inspect `/api/status`.
@@ -193,7 +198,7 @@ changes that conflict with it.
      approved deployment.
 
 6. Confirm the cron trigger:
-   - `wrangler.jsonc` configures `*/5 * * * *`.
+- `wrangler.jsonc` configures `*/15 * * * *`.
    - For a deployed Worker, go to Workers & Pages, select the Worker, then open
      Settings > Triggers > Cron Triggers to confirm it exists.
    - Cron trigger changes can take up to 15 minutes to propagate.
