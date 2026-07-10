@@ -16,6 +16,33 @@
       "url": "https://securitymasterclasses.securityexcellence.net/",
       "description": "Security masterclasses site",
       "timeoutMs": 8000
+    },
+    {
+      "id": "shopify-status",
+      "name": "Shopify Platform",
+      "group": "Platform Dependencies",
+      "url": "https://www.shopifystatus.com",
+      "description": "Shopify platform status",
+      "checkType": "statusPage",
+      "timeoutMs": 8000
+    },
+    {
+      "id": "cloudflare-status",
+      "name": "Cloudflare Platform",
+      "group": "Platform Dependencies",
+      "url": "https://www.cloudflarestatus.com",
+      "description": "Cloudflare platform status",
+      "checkType": "statusPage",
+      "timeoutMs": 8000
+    },
+    {
+      "id": "learnworlds-status",
+      "name": "LearnWorlds Platform",
+      "group": "Platform Dependencies",
+      "url": "https://status.learnworlds.com",
+      "description": "LearnWorlds platform status",
+      "checkType": "incidentIoHtml",
+      "timeoutMs": 8000
     }
   ]
 }

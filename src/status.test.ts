@@ -103,6 +103,49 @@ describe("checkService", () => {
       error: "connection refused"
     });
   });
+
+  it("checks Statuspage API health instead of only the landing page", async () => {
+    const statusPage = { ...service, checkType: "statusPage" as const };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      status: { indicator: "none" },
+      components: [{ status: "operational" }]
+    }), { status: 200 }));
+
+    await expect(checkService(statusPage, fetcher)).resolves.toMatchObject({ status: "operational" });
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://example.com/api/v2/summary.json",
+      expect.anything()
+    );
+  });
+
+  it("reports a provider incident from Statuspage data", async () => {
+    const statusPage = { ...service, checkType: "statusPage" as const };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      status: { indicator: "major" },
+      components: [{ status: "major_outage" }]
+    }), { status: 200 }));
+
+    await expect(checkService(statusPage, fetcher)).resolves.toMatchObject({
+      status: "outage",
+      error: "Status page indicator: major"
+    });
+  });
+
+  it("reads Incident.io status data embedded in Next.js HTML", async () => {
+    const statusPage = { ...service, checkType: "incidentIoHtml" as const };
+    const html = `<script>self.__next_f.push([1,"4:{\\"summary\\":{\\"affected_components\\":[],\\"ongoing_incidents\\":[],\\"scheduled_maintenances\\":[]}}"])</script>`;
+    const fetcher = vi.fn().mockResolvedValue(new Response(html, { status: 200 }));
+
+    await expect(checkService(statusPage, fetcher)).resolves.toMatchObject({ status: "operational" });
+  });
+
+  it("reports active Incident.io incidents", async () => {
+    const statusPage = { ...service, checkType: "incidentIoHtml" as const };
+    const html = `<script>self.__next_f.push([1,"4:{\\"summary\\":{\\"affected_components\\":[{\\"id\\":\\"component\\"}],\\"ongoing_incidents\\":[],\\"scheduled_maintenances\\":[]}}"])</script>`;
+    const fetcher = vi.fn().mockResolvedValue(new Response(html, { status: 200 }));
+
+    await expect(checkService(statusPage, fetcher)).resolves.toMatchObject({ status: "outage" });
+  });
 });
 
 describe("status snapshots", () => {

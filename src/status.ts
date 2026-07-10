@@ -62,6 +62,7 @@ export function parseServicesConfig(config: unknown): ServiceCatalog {
     const group = readTrimmedString(service.group) || DEFAULT_GROUP;
     const description = readTrimmedString(service.description);
     const timeoutMs = readOptionalInteger(service.timeoutMs);
+    const checkType = service.checkType === undefined ? "http" : readTrimmedString(service.checkType);
     const serviceIssues: ConfigIssue[] = [];
 
     if (!id || !serviceIdPattern.test(id)) {
@@ -88,6 +89,10 @@ export function parseServicesConfig(config: unknown): ServiceCatalog {
       serviceIssues.push({ index, id: id || undefined, message: "timeoutMs must be between 1000 and 30000." });
     }
 
+    if (checkType !== "http" && checkType !== "statusPage" && checkType !== "incidentIoHtml") {
+      serviceIssues.push({ index, id: id || undefined, message: "checkType must be http, statusPage, or incidentIoHtml." });
+    }
+
     if (serviceIssues.length > 0) {
       issues.push(...serviceIssues);
       return;
@@ -100,7 +105,8 @@ export function parseServicesConfig(config: unknown): ServiceCatalog {
       group,
       url,
       ...(description ? { description } : {}),
-      ...(timeoutMs ? { timeoutMs } : {})
+      ...(timeoutMs ? { timeoutMs } : {}),
+      ...(checkType !== "http" ? { checkType: checkType as "statusPage" | "incidentIoHtml" } : {})
     });
   });
 
@@ -118,13 +124,21 @@ export async function checkService(
   const timeoutId = setTimeout(() => controller.abort("timeout"), timeoutMs);
 
   try {
-    const response = await fetcher(service.url, {
+    const response = await fetcher(requestUrl(service), {
       method: "GET",
       headers: CHECK_REQUEST_HEADERS,
       redirect: "follow",
       signal: controller.signal
     });
     const latencyMs = Date.now() - startedAt;
+    if (service.checkType === "incidentIoHtml") {
+      return await checkIncidentIoHtml(service, response, latencyMs, checkedAt);
+    }
+
+    if (service.checkType === "statusPage") {
+      return await checkStatusPage(service, response, latencyMs, checkedAt);
+    }
+
     const isHealthy = response.status >= 200 && response.status < 400;
 
     return {
@@ -146,6 +160,109 @@ export async function checkService(
     };
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+async function checkIncidentIoHtml(
+  service: ServiceDefinition,
+  response: Response,
+  latencyMs: number,
+  checkedAt: string
+): Promise<ServiceCheckResult> {
+  if (response.status < 200 || response.status >= 400) {
+    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: `HTTP ${response.status}` };
+  }
+
+  const html = await response.text();
+  const payload = extractNextPayload(html);
+  const affected = extractJsonArray(payload, "affected_components");
+  const incidents = extractJsonArray(payload, "ongoing_incidents");
+  const maintenances = extractJsonArray(payload, "scheduled_maintenances");
+
+  if (!affected || !incidents || !maintenances) {
+    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: "Invalid Incident.io status response" };
+  }
+
+  const isHealthy = affected.length === 0 && incidents.length === 0 && maintenances.length === 0;
+  return {
+    ...service,
+    status: isHealthy ? "operational" : "outage",
+    latencyMs,
+    statusCode: response.status,
+    checkedAt,
+    ...(isHealthy ? {} : { error: "Active Incident.io incident or maintenance" })
+  };
+}
+
+async function checkStatusPage(
+  service: ServiceDefinition,
+  response: Response,
+  latencyMs: number,
+  checkedAt: string
+): Promise<ServiceCheckResult> {
+  if (response.status < 200 || response.status >= 400) {
+    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: `HTTP ${response.status}` };
+  }
+
+  try {
+    const summary = await response.json() as {
+      status?: { indicator?: string };
+      components?: Array<{ status?: string }>;
+    };
+    const components = summary.components ?? [];
+    const isHealthy = summary.status?.indicator === "none" &&
+      components.every((component) => component.status === "operational");
+
+    return {
+      ...service,
+      status: isHealthy ? "operational" : "outage",
+      latencyMs,
+      statusCode: response.status,
+      checkedAt,
+      ...(isHealthy ? {} : { error: `Status page indicator: ${summary.status?.indicator ?? "unknown"}` })
+    };
+  } catch {
+    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: "Invalid status page response" };
+  }
+}
+
+function extractNextPayload(html: string): string {
+  const payloads: string[] = [];
+  const pattern = /self\.\__next_f\.push\(\[1,("(?:\\.|[^"\\])*")\]\)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(html)) !== null) {
+    try {
+      payloads.push(JSON.parse(match[1]) as string);
+    } catch {
+      // Ignore malformed payload fragments and let field validation fail.
+    }
+  }
+
+  return payloads.join("\n");
+}
+
+function requestUrl(service: ServiceDefinition): string {
+  if (service.checkType !== "statusPage") {
+    return service.url;
+  }
+
+  return `${service.url.replace(/\/$/, "")}/api/v2/summary.json`;
+}
+
+function extractJsonArray(payload: string, field: string): unknown[] | null {
+  const start = payload.indexOf(`"${field}"`);
+  if (start < 0) return null;
+  const arrayStart = payload.indexOf("[", start);
+  if (arrayStart < 0) return null;
+  const arrayEnd = payload.indexOf("]", arrayStart);
+  if (arrayEnd < 0) return null;
+
+  try {
+    const value = JSON.parse(payload.slice(arrayStart, arrayEnd + 1));
+    return Array.isArray(value) ? value : null;
+  } catch {
+    return null;
   }
 }
 

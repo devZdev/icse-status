@@ -11,6 +11,7 @@ export interface ServiceDefinition {
   url: string;
   description?: string;
   timeoutMs?: number;
+  checkType?: "http" | "statusPage" | "incidentIoHtml";
 }
 
 export interface ConfigIssue {
@@ -73,4 +74,3 @@ export interface Env {
   STATUS_KV: KVNamespace;
   ASSETS: Fetcher;
 }
-
