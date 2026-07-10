@@ -28,6 +28,11 @@ const STATUS_META = {
   }
 };
 
+const SEVERITY_META = {
+  minor: { label: "Minor incident" },
+  major: { label: "Major incident" }
+};
+
 refreshButton?.addEventListener("click", () => {
   void loadStatus();
 });
@@ -137,7 +142,7 @@ function renderServices(services) {
 
 function renderServiceRow(service) {
   const row = document.createElement("article");
-  row.className = `service-row is-${service.status}`;
+  row.className = `service-row is-${service.severity ?? service.status}`;
 
   const statusDot = document.createElement("span");
   statusDot.className = "status-dot";
@@ -147,7 +152,12 @@ function renderServiceRow(service) {
   nameBlock.className = "service-name";
 
   const name = document.createElement("h4");
-  name.textContent = service.name;
+  const link = document.createElement("a");
+  link.href = service.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = service.name;
+  name.append(link);
   nameBlock.append(name);
 
   if (service.description) {
@@ -158,7 +168,7 @@ function renderServiceRow(service) {
 
   const metrics = document.createElement("dl");
   metrics.className = "service-metrics";
-  metrics.append(metric("State", STATUS_META[service.status]?.label ?? service.status));
+  metrics.append(metric("State", SEVERITY_META[service.severity]?.label ?? STATUS_META[service.status]?.label ?? service.status));
   metrics.append(metric("Latency", formatLatency(service.latencyMs)));
   metrics.append(metric("HTTP", service.statusCode ?? "--"));
   metrics.append(metric("Checked", formatTime(service.checkedAt)));
@@ -259,4 +269,3 @@ function formatTime(value) {
     timeStyle: "short"
   }).format(date);
 }
-

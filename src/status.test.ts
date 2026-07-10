@@ -127,6 +127,7 @@ describe("checkService", () => {
 
     await expect(checkService(statusPage, fetcher)).resolves.toMatchObject({
       status: "outage",
+      severity: "major",
       error: "Status page indicator: major"
     });
   });

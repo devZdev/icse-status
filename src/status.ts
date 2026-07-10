@@ -216,6 +216,7 @@ async function checkStatusPage(
     return {
       ...service,
       status: isHealthy ? "operational" : "outage",
+      ...(isHealthy ? {} : { severity: summary.status?.indicator === "minor" ? "minor" as const : "major" as const }),
       latencyMs,
       statusCode: response.status,
       checkedAt,

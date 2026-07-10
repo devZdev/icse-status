@@ -27,6 +27,7 @@ export interface ServiceCatalog {
 
 export interface ServiceCheckResult extends ServiceDefinition {
   status: ServiceState;
+  severity?: "minor" | "major";
   latencyMs: number | null;
   statusCode: number | null;
   checkedAt: string | null;

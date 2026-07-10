@@ -175,6 +175,16 @@ h4 {
   background: var(--red-bg);
 }
 
+.is-minor {
+  color: var(--amber);
+  background: var(--amber-bg);
+}
+
+.is-major {
+  color: var(--red);
+  background: var(--red-bg);
+}
+
 .is-unknown {
   color: var(--blue);
   background: var(--blue-bg);
@@ -238,8 +248,32 @@ h4 {
   background: #fbfcfe;
 }
 
+.service-name a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: currentColor;
+  text-underline-offset: 2px;
+}
+
+.service-name a:hover,
+.service-name a:focus {
+  color: var(--blue);
+}
+
 .service-row.is-outage {
   border-color: #f0b7b7;
+}
+
+.service-row.is-minor {
+  border-color: #e7bd70;
+  color: var(--amber);
+  background: var(--amber-bg);
+}
+
+.service-row.is-major {
+  border-color: #f0b7b7;
+  color: var(--red);
+  background: var(--red-bg);
 }
 
 .service-row.is-operational {
@@ -361,4 +395,3 @@ h4 {
     padding: 16px;
   }
 }
-
