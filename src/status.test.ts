@@ -147,6 +147,14 @@ describe("checkService", () => {
 
     await expect(checkService(statusPage, fetcher)).resolves.toMatchObject({ status: "outage" });
   });
+
+  it("checks Arlo's current HTML status without treating history as active", async () => {
+    const statusPage = { ...service, checkType: "arloHtml" as const };
+    const html = "All systems are operational All Good Past Incidents major outage";
+    const fetcher = vi.fn().mockResolvedValue(new Response(html, { status: 200 }));
+
+    await expect(checkService(statusPage, fetcher)).resolves.toMatchObject({ status: "operational" });
+  });
 });
 
 describe("status snapshots", () => {

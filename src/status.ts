@@ -89,8 +89,8 @@ export function parseServicesConfig(config: unknown): ServiceCatalog {
       serviceIssues.push({ index, id: id || undefined, message: "timeoutMs must be between 1000 and 30000." });
     }
 
-    if (checkType !== "http" && checkType !== "statusPage" && checkType !== "incidentIoHtml") {
-      serviceIssues.push({ index, id: id || undefined, message: "checkType must be http, statusPage, or incidentIoHtml." });
+    if (checkType !== "http" && checkType !== "statusPage" && checkType !== "incidentIoHtml" && checkType !== "arloHtml") {
+      serviceIssues.push({ index, id: id || undefined, message: "checkType must be http, statusPage, incidentIoHtml, or arloHtml." });
     }
 
     if (serviceIssues.length > 0) {
@@ -106,7 +106,7 @@ export function parseServicesConfig(config: unknown): ServiceCatalog {
       url,
       ...(description ? { description } : {}),
       ...(timeoutMs ? { timeoutMs } : {}),
-      ...(checkType !== "http" ? { checkType: checkType as "statusPage" | "incidentIoHtml" } : {})
+      ...(checkType !== "http" ? { checkType: checkType as "statusPage" | "incidentIoHtml" | "arloHtml" } : {})
     });
   });
 
@@ -135,6 +135,10 @@ export async function checkService(
       return await checkIncidentIoHtml(service, response, latencyMs, checkedAt);
     }
 
+    if (service.checkType === "arloHtml") {
+      return await checkArloHtml(service, response, latencyMs, checkedAt);
+    }
+
     if (service.checkType === "statusPage") {
       return await checkStatusPage(service, response, latencyMs, checkedAt);
     }
@@ -161,6 +165,31 @@ export async function checkService(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function checkArloHtml(
+  service: ServiceDefinition,
+  response: Response,
+  latencyMs: number,
+  checkedAt: string
+): Promise<ServiceCheckResult> {
+  if (response.status < 200 || response.status >= 400) {
+    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: `HTTP ${response.status}` };
+  }
+
+  const html = (await response.text()).toLowerCase();
+  const currentStatus = html.split("past incidents", 1)[0];
+  const isHealthy = currentStatus.includes("all systems are operational") &&
+    !/(partial outage|major outage|degraded|investigating|service disruption)/.test(currentStatus);
+
+  return {
+    ...service,
+    status: isHealthy ? "operational" : "outage",
+    latencyMs,
+    statusCode: response.status,
+    checkedAt,
+    ...(isHealthy ? {} : { error: "Arlo status page reports an incident or has an unrecognized status" })
+  };
 }
 
 async function checkIncidentIoHtml(

@@ -41,7 +41,7 @@
       "group": "Platform Dependencies",
       "url": "https://status.arlo.com",
       "description": "Arlo platform status",
-      "checkType": "statusPage",
+      "checkType": "arloHtml",
       "timeoutMs": 8000
     },
     {

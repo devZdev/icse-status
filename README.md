@@ -67,8 +67,9 @@ Rules:
 - HTTP `4xx`, `5xx`, timeouts, and network failures are outages.
 - `timeoutMs` is optional and must be between `1000` and `30000`.
 - `checkType` is optional and defaults to `http`. Use `statusPage` for a
-  provider using the standard Statuspage API, or `incidentIoHtml` for a
-  LearnWorlds/Incident.io page whose status data is embedded in its HTML.
+  provider using the standard Statuspage API, `incidentIoHtml` for a
+  LearnWorlds/Incident.io page whose status data is embedded in its HTML, or
+  `arloHtml` for Arlo's legacy HTML status page.
 - Keep `id` stable once a service has been deployed; changing it makes the app
   treat the endpoint as a different service in history.
 

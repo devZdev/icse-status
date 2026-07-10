@@ -37,7 +37,7 @@
           },
           "checkType": {
             "type": "string",
-            "enum": ["http", "statusPage", "incidentIoHtml"]
+            "enum": ["http", "statusPage", "incidentIoHtml", "arloHtml"]
           }
         }
       }

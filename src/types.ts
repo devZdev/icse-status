@@ -11,7 +11,7 @@ export interface ServiceDefinition {
   url: string;
   description?: string;
   timeoutMs?: number;
-  checkType?: "http" | "statusPage" | "incidentIoHtml";
+  checkType?: "http" | "statusPage" | "incidentIoHtml" | "arloHtml";
 }
 
 export interface ConfigIssue {
