@@ -36,6 +36,15 @@
       "timeoutMs": 8000
     },
     {
+      "id": "arlo-status",
+      "name": "Arlo Platform",
+      "group": "Platform Dependencies",
+      "url": "https://status.arlo.com",
+      "description": "Arlo platform status",
+      "checkType": "statusPage",
+      "timeoutMs": 8000
+    },
+    {
       "id": "learnworlds-status",
       "name": "LearnWorlds Platform",
       "group": "Platform Dependencies",

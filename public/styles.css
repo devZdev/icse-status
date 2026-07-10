@@ -9,6 +9,8 @@
   --green-bg: #e6f6ed;
   --amber: #b06400;
   --amber-bg: #fff2d6;
+  --orange: #c45f00;
+  --orange-bg: #fff0d2;
   --red: #bf2d2d;
   --red-bg: #ffe3e3;
   --blue: #2457a6;
@@ -176,8 +178,8 @@ h4 {
 }
 
 .is-minor {
-  color: var(--amber);
-  background: var(--amber-bg);
+  color: var(--orange);
+  background: var(--orange-bg);
 }
 
 .is-major {
@@ -266,8 +268,8 @@ h4 {
 
 .service-row.is-minor {
   border-color: #e7bd70;
-  color: var(--amber);
-  background: var(--amber-bg);
+  color: var(--orange);
+  background: var(--orange-bg);
 }
 
 .service-row.is-major {
