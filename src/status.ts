@@ -31,6 +31,8 @@ interface RunChecksOptions {
   fetcher?: FetchFunction;
   trigger: CheckTrigger;
   concurrency?: number;
+  slackWebhookUrl?: string;
+  slackFetcher?: FetchFunction;
 }
 
 const serviceIdPattern = /^[a-z0-9][a-z0-9-]*$/;
@@ -346,7 +348,46 @@ export async function runChecksAndPersist(
     writeJson(kv, LAST_RUN_KEY, snapshot.lastRun)
   ]);
 
+  await notifySlackOfOutages(previousSnapshot, snapshot, options);
+
   return snapshot;
+}
+
+async function notifySlackOfOutages(
+  previousSnapshot: StatusSnapshot | null,
+  snapshot: StatusSnapshot,
+  options: RunChecksOptions
+): Promise<void> {
+  if (!options.slackWebhookUrl) {
+    return;
+  }
+
+  const previousById = new Map(
+    previousSnapshot?.services.map((service) => [service.id, service.status] as const) ?? []
+  );
+  const outages = snapshot.services.filter((service) =>
+    service.status === "outage" && previousById.get(service.id) !== "outage"
+  );
+
+  if (outages.length === 0) {
+    return;
+  }
+
+  const lines = outages.map((service) => {
+    const severity = service.severity === "minor" ? "Minor" : "Major";
+    return `• ${severity} outage: ${service.name} — ${service.error ?? "failed health check"} (${service.url})`;
+  });
+  const response = await (options.slackFetcher ?? fetch)(options.slackWebhookUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      text: `ICSE Status alert at ${snapshot.generatedAt}\n${lines.join("\n")}`
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Slack webhook returned HTTP ${response.status}`);
+  }
 }
 
 export async function getLatestSnapshot(kv: KVNamespace): Promise<StatusSnapshot | null> {

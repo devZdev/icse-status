@@ -28,7 +28,10 @@ export default {
 
   scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(
-      runChecksAndPersist(env.STATUS_KV, serviceCatalog, { trigger: "scheduled" }).catch((error) => {
+      runChecksAndPersist(env.STATUS_KV, serviceCatalog, {
+        trigger: "scheduled",
+        slackWebhookUrl: env.SLACK_WEBHOOK_URL
+      }).catch((error) => {
         console.error("Scheduled status check failed", error);
       })
     );
@@ -65,4 +68,3 @@ async function handleApiRequest(request: Request, env: Env, url: URL): Promise<R
     return jsonResponse({ error: "Status API failed" }, 500);
   }
 }
-

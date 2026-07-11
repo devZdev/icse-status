@@ -74,4 +74,5 @@ export interface StatusEvent {
 export interface Env {
   STATUS_KV: KVNamespace;
   ASSETS: Fetcher;
+  SLACK_WEBHOOK_URL?: string;
 }

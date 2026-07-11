@@ -33,6 +33,20 @@ npx wrangler kv namespace create STATUS_KV --preview
 
 Copy the returned `id` and `preview_id` values into `wrangler.jsonc`.
 
+### Slack Outage Alerts
+
+To receive one Slack notification when a service transitions into an outage,
+create a Slack incoming webhook and configure it as a Worker secret:
+
+```sh
+npx wrangler secret put SLACK_WEBHOOK_URL
+```
+
+The webhook URL is never stored in the repository. Alerts are sent only when a
+new outage is detected; repeated scheduled checks do not resend the same alert.
+Slack failures are logged and do not prevent the status snapshot from being
+stored.
+
 ## Configure Services
 
 Service checks are configured in `config/services.json`. The file starts with an
