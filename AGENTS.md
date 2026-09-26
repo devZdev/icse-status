@@ -38,7 +38,12 @@ Current storage is intentionally simple: Workers KV stores `status:latest`,
 
 - Use TypeScript ESM and keep `strict` compatibility.
 - Keep Worker runtime code platform-native: use Fetch API, `Request`, `Response`, `AbortController`, and Cloudflare bindings instead of Node-only APIs.
-- Treat HTTP `2xx` and `3xx` as healthy. Treat HTTP `4xx`, `5xx`, timeouts, and network failures as outages.
+- Treat HTTP `2xx` and `3xx` as operational.
+- Treat HTTP `403` and `429` as degraded probe blocks (`status: degraded`, `severity: probe_blocked`, error `Probe blocked (HTTP 403)` or `Probe blocked (HTTP 429)`). Do not Slack them. This applies before body parsing on `http`, `arloHtml`, `statusPage`, and `incidentIoHtml` checks.
+- Treat other HTTP `4xx` (including `404` and `410`), `5xx`, timeouts, and network failures as customer outages (`status: outage`, `severity: major`). Slack `Major` on the transition into that outage.
+- Statuspage indicator `minor` or `maintenance`, and a Statuspage component set that is only `degraded_performance`, is `status: outage` with `severity: minor`. Slack `Minor` on that transition. Do not label it Major.
+- Statuspage indicator `major` or `critical`, plus Arlo HTML and Incident.io content incidents, are `status: outage` with `severity: major`.
+- Overall status is `operational` when every service is operational, `outage` only when every service is a major customer outage, and `degraded` for probe blocks, minor incidents, or a mix of major outages with anything else. `unknown` remains the state before any check.
 - Keep service `id` values stable. They are used for status history and state comparisons.
 - Keep the frontend vanilla HTML/CSS/JavaScript unless there is a clear need for a framework.
 - Keep API responses JSON with `cache-control: no-store`.

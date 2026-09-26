@@ -167,7 +167,8 @@ h4 {
   background: var(--green-bg);
 }
 
-.is-degraded {
+.is-degraded,
+.is-probe_blocked {
   color: var(--amber);
   background: var(--amber-bg);
 }
@@ -264,6 +265,17 @@ h4 {
 
 .service-row.is-outage {
   border-color: #f0b7b7;
+}
+
+.service-row.is-degraded,
+.service-row.is-probe_blocked {
+  border-color: #e7c27a;
+  color: var(--amber);
+  background: var(--amber-bg);
+}
+
+.history-item.is-degraded {
+  border-color: #e7c27a;
 }
 
 .service-row.is-minor {
