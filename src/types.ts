@@ -1,6 +1,13 @@
-export type ServiceState = "operational" | "outage" | "unknown";
+export type ServiceState = "operational" | "degraded" | "outage" | "unknown";
 
 export type OverallState = "operational" | "degraded" | "outage" | "unknown";
+
+/**
+ * Alert severity for a non-operational check.
+ * probe_blocked is not a customer outage and does not page Slack.
+ * minor and major are customer-impact severities and do page Slack.
+ */
+export type ServiceSeverity = "probe_blocked" | "minor" | "major";
 
 export type CheckTrigger = "scheduled";
 
@@ -27,7 +34,7 @@ export interface ServiceCatalog {
 
 export interface ServiceCheckResult extends ServiceDefinition {
   status: ServiceState;
-  severity?: "minor" | "major";
+  severity?: ServiceSeverity;
   latencyMs: number | null;
   statusCode: number | null;
   checkedAt: string | null;
@@ -37,6 +44,7 @@ export interface ServiceCheckResult extends ServiceDefinition {
 export interface StatusSummary {
   total: number;
   operational: number;
+  degraded: number;
   outage: number;
   unknown: number;
 }
@@ -47,6 +55,7 @@ export interface LastRunMetadata {
   trigger: CheckTrigger;
   total: number;
   operational: number;
+  degraded: number;
   outage: number;
 }
 

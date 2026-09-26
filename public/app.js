@@ -16,7 +16,7 @@ const STATUS_META = {
   },
   degraded: {
     label: "Degraded",
-    detail: "One or more monitored services are not responding normally."
+    detail: "Some monitored services are check-blocked, reporting a minor issue, or only partly failing."
   },
   outage: {
     label: "Outage",
@@ -29,6 +29,7 @@ const STATUS_META = {
 };
 
 const SEVERITY_META = {
+  probe_blocked: { label: "Check blocked" },
   minor: { label: "Minor incident" },
   major: { label: "Major incident" }
 };
@@ -93,6 +94,7 @@ function buildSummaryText(snapshot, fallback) {
 
   const parts = [
     `${snapshot.summary.operational} operational`,
+    `${snapshot.summary.degraded ?? 0} degraded`,
     `${snapshot.summary.outage} outage`,
     `${snapshot.summary.unknown} unknown`
   ];

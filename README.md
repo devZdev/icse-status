@@ -43,9 +43,18 @@ npx wrangler secret put SLACK_WEBHOOK_URL
 ```
 
 The webhook URL is never stored in the repository. Alerts are sent only when a
-new outage is detected; repeated scheduled checks do not resend the same alert.
-Slack failures are logged and do not prevent the status snapshot from being
-stored.
+service transitions into a customer-facing outage. Repeated scheduled checks do
+not resend the same alert. Slack failures are logged and do not prevent the
+status snapshot from being stored.
+
+Severity sent to Slack:
+
+- `Major` for HTTP `5xx`, timeouts, network failures, non-`403`/`429` `4xx`
+  responses (including `404` and `410`), Statuspage `major` or `critical`, and
+  Arlo or Incident.io content incidents.
+- `Minor` for Statuspage indicator `minor` or `maintenance`. Minor stays Minor.
+- No Slack message for HTTP `403` or `429`. Those are probe blocks, not customer
+  outages, and the page shows them as degraded / check blocked.
 
 ## Configure Services
 
@@ -77,8 +86,15 @@ Rules:
 
 - `id` must be lowercase letters, digits, and hyphens.
 - `url` must be `http` or `https`.
-- HTTP `2xx` and `3xx` responses are healthy.
-- HTTP `4xx`, `5xx`, timeouts, and network failures are outages.
+- HTTP `2xx` and `3xx` responses are operational.
+- HTTP `403` and `429` are degraded probe blocks (`severity: probe_blocked`).
+  They are not customer outages and do not page Slack.
+- Other HTTP `4xx` (including `404` and `410`), `5xx`, timeouts, and network
+  failures are major outages.
+- Statuspage `minor` and `maintenance` are minor outages. Slack says Minor.
+  Statuspage `major` and `critical` are major outages. Slack says Major.
+- Overall status is `outage` only when every service is a major outage. Probe
+  blocks or minor incidents alone keep the page `degraded`.
 - `timeoutMs` is optional and must be between `1000` and `30000`.
 - `checkType` is optional and defaults to `http`. Use `statusPage` for a
   provider using the standard Statuspage API, `incidentIoHtml` for a

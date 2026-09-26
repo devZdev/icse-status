@@ -6,6 +6,7 @@ import type {
   ServiceCatalog,
   ServiceCheckResult,
   ServiceDefinition,
+  ServiceSeverity,
   ServiceState,
   StatusEvent,
   StatusSnapshot,
@@ -133,6 +134,10 @@ export async function checkService(
       signal: controller.signal
     });
     const latencyMs = Date.now() - startedAt;
+    if (!isHttpSuccess(response.status)) {
+      return httpFailureResult(service, response.status, latencyMs, checkedAt);
+    }
+
     if (service.checkType === "incidentIoHtml") {
       return await checkIncidentIoHtml(service, response, latencyMs, checkedAt);
     }
@@ -145,20 +150,18 @@ export async function checkService(
       return await checkStatusPage(service, response, latencyMs, checkedAt);
     }
 
-    const isHealthy = response.status >= 200 && response.status < 400;
-
     return {
       ...service,
-      status: isHealthy ? "operational" : "outage",
+      status: "operational",
       latencyMs,
       statusCode: response.status,
-      checkedAt,
-      ...(isHealthy ? {} : { error: `HTTP ${response.status}` })
+      checkedAt
     };
   } catch (error) {
     return {
       ...service,
       status: "outage",
+      severity: "major",
       latencyMs: Date.now() - startedAt,
       statusCode: null,
       checkedAt,
@@ -175,8 +178,8 @@ async function checkArloHtml(
   latencyMs: number,
   checkedAt: string
 ): Promise<ServiceCheckResult> {
-  if (response.status < 200 || response.status >= 400) {
-    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: `HTTP ${response.status}` };
+  if (!isHttpSuccess(response.status)) {
+    return httpFailureResult(service, response.status, latencyMs, checkedAt);
   }
 
   const html = (await response.text()).toLowerCase();
@@ -187,6 +190,7 @@ async function checkArloHtml(
   return {
     ...service,
     status: isHealthy ? "operational" : "outage",
+    ...(isHealthy ? {} : { severity: "major" as const }),
     latencyMs,
     statusCode: response.status,
     checkedAt,
@@ -200,8 +204,8 @@ async function checkIncidentIoHtml(
   latencyMs: number,
   checkedAt: string
 ): Promise<ServiceCheckResult> {
-  if (response.status < 200 || response.status >= 400) {
-    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: `HTTP ${response.status}` };
+  if (!isHttpSuccess(response.status)) {
+    return httpFailureResult(service, response.status, latencyMs, checkedAt);
   }
 
   const html = await response.text();
@@ -211,13 +215,22 @@ async function checkIncidentIoHtml(
   const maintenances = extractJsonArray(payload, "scheduled_maintenances");
 
   if (!affected || !incidents || !maintenances) {
-    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: "Invalid Incident.io status response" };
+    return {
+      ...service,
+      status: "outage",
+      severity: "major",
+      latencyMs,
+      statusCode: response.status,
+      checkedAt,
+      error: "Invalid Incident.io status response"
+    };
   }
 
   const isHealthy = affected.length === 0 && incidents.length === 0 && maintenances.length === 0;
   return {
     ...service,
     status: isHealthy ? "operational" : "outage",
+    ...(isHealthy ? {} : { severity: "major" as const }),
     latencyMs,
     statusCode: response.status,
     checkedAt,
@@ -231,8 +244,8 @@ async function checkStatusPage(
   latencyMs: number,
   checkedAt: string
 ): Promise<ServiceCheckResult> {
-  if (response.status < 200 || response.status >= 400) {
-    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: `HTTP ${response.status}` };
+  if (!isHttpSuccess(response.status)) {
+    return httpFailureResult(service, response.status, latencyMs, checkedAt);
   }
 
   try {
@@ -241,20 +254,29 @@ async function checkStatusPage(
       components?: Array<{ status?: string }>;
     };
     const components = summary.components ?? [];
-    const isHealthy = summary.status?.indicator === "none" &&
+    const indicator = summary.status?.indicator;
+    const isHealthy = indicator === "none" &&
       components.every((component) => component.status === "operational");
 
     return {
       ...service,
       status: isHealthy ? "operational" : "outage",
-      ...(isHealthy ? {} : { severity: summary.status?.indicator === "minor" ? "minor" as const : "major" as const }),
+      ...(isHealthy ? {} : { severity: providerIncidentSeverity(indicator, components) }),
       latencyMs,
       statusCode: response.status,
       checkedAt,
-      ...(isHealthy ? {} : { error: `Status page indicator: ${summary.status?.indicator ?? "unknown"}` })
+      ...(isHealthy ? {} : { error: `Status page indicator: ${indicator ?? "unknown"}` })
     };
   } catch {
-    return { ...service, status: "outage", latencyMs, statusCode: response.status, checkedAt, error: "Invalid status page response" };
+    return {
+      ...service,
+      status: "outage",
+      severity: "major",
+      latencyMs,
+      statusCode: response.status,
+      checkedAt,
+      error: "Invalid status page response"
+    };
   }
 }
 
@@ -316,6 +338,7 @@ export async function runChecks(
     trigger: options.trigger,
     total: summary.total,
     operational: summary.operational,
+    degraded: summary.degraded,
     outage: summary.outage
   };
 
@@ -365,18 +388,22 @@ async function notifySlackOfOutages(
   const previousById = new Map(
     previousSnapshot?.services.map((service) => [service.id, service.status] as const) ?? []
   );
-  const outages = snapshot.services.filter((service) =>
-    service.status === "outage" && previousById.get(service.id) !== "outage"
-  );
+  const lines = snapshot.services.flatMap((service) => {
+    if (service.status !== "outage" || previousById.get(service.id) === "outage") {
+      return [];
+    }
 
-  if (outages.length === 0) {
+    const label = slackImpactLabel(service);
+    if (!label) {
+      return [];
+    }
+
+    return [`• ${label} outage: ${service.name} — ${service.error ?? "failed health check"} (${service.url})`];
+  });
+
+  if (lines.length === 0) {
     return;
   }
-
-  const lines = outages.map((service) => {
-    const severity = service.severity === "minor" ? "Minor" : "Major";
-    return `• ${severity} outage: ${service.name} — ${service.error ?? "failed health check"} (${service.url})`;
-  });
   const response = await (options.slackFetcher ?? fetch)(options.slackWebhookUrl, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -447,19 +474,19 @@ export function aggregateStatus(results: ServiceCheckResult[]): OverallState {
     return "unknown";
   }
 
-  const outageCount = results.filter((result) => result.status === "outage").length;
   const unknownCount = results.filter((result) => result.status === "unknown").length;
-
   if (unknownCount === results.length) {
     return "unknown";
   }
 
-  if (outageCount === 0 && unknownCount === 0) {
-    return "operational";
+  const majorCount = results.filter((result) => isMajorCustomerOutage(result)).length;
+  if (majorCount === results.length) {
+    return "outage";
   }
 
-  if (outageCount === results.length) {
-    return "outage";
+  const operationalCount = results.filter((result) => result.status === "operational").length;
+  if (operationalCount === results.length) {
+    return "operational";
   }
 
   return "degraded";
@@ -469,6 +496,7 @@ export function buildSummary(results: ServiceCheckResult[]): StatusSummary {
   return {
     total: results.length,
     operational: results.filter((result) => result.status === "operational").length,
+    degraded: results.filter((result) => result.status === "degraded").length,
     outage: results.filter((result) => result.status === "outage").length,
     unknown: results.filter((result) => result.status === "unknown").length
   };
@@ -582,6 +610,98 @@ function isHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isHttpSuccess(statusCode: number): boolean {
+  return statusCode >= 200 && statusCode < 400;
+}
+
+function isProbeBlockedStatus(statusCode: number): boolean {
+  return statusCode === 403 || statusCode === 429;
+}
+
+function httpFailureResult(
+  service: ServiceDefinition,
+  statusCode: number,
+  latencyMs: number,
+  checkedAt: string
+): ServiceCheckResult {
+  if (isProbeBlockedStatus(statusCode)) {
+    return {
+      ...service,
+      status: "degraded",
+      severity: "probe_blocked",
+      latencyMs,
+      statusCode,
+      checkedAt,
+      error: `Probe blocked (HTTP ${statusCode})`
+    };
+  }
+
+  return {
+    ...service,
+    status: "outage",
+    severity: "major",
+    latencyMs,
+    statusCode,
+    checkedAt,
+    error: `HTTP ${statusCode}`
+  };
+}
+
+function providerIncidentSeverity(
+  indicator: string | undefined,
+  components: Array<{ status?: string }>
+): Extract<ServiceSeverity, "minor" | "major"> {
+  if (indicator === "minor" || indicator === "maintenance") {
+    return "minor";
+  }
+
+  if (indicator === "major" || indicator === "critical") {
+    return "major";
+  }
+
+  const unhealthy = components
+    .map((component) => component.status)
+    .filter((status) => status && status !== "operational");
+  if (unhealthy.length > 0 && unhealthy.every((status) => status === "degraded_performance")) {
+    return "minor";
+  }
+
+  return "major";
+}
+
+function isMajorCustomerOutage(result: ServiceCheckResult): boolean {
+  if (result.severity === "minor" || result.severity === "probe_blocked") {
+    return false;
+  }
+
+  if (result.statusCode === 403 || result.statusCode === 429) {
+    return false;
+  }
+
+  return result.status === "outage";
+}
+
+function slackImpactLabel(service: ServiceCheckResult): "Minor" | "Major" | null {
+  if (
+    service.severity === "probe_blocked" ||
+    service.status === "degraded" ||
+    service.statusCode === 403 ||
+    service.statusCode === 429
+  ) {
+    return null;
+  }
+
+  if (service.severity === "minor") {
+    return "Minor";
+  }
+
+  if (service.severity === "major" || service.status === "outage") {
+    return "Major";
+  }
+
+  return null;
 }
 
 function describeFetchError(error: unknown): string {
