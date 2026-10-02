@@ -168,7 +168,8 @@ h4 {
 }
 
 .is-degraded,
-.is-probe_blocked {
+.is-probe_blocked,
+.is-check_failed {
   color: var(--amber);
   background: var(--amber-bg);
 }
@@ -268,7 +269,8 @@ h4 {
 }
 
 .service-row.is-degraded,
-.service-row.is-probe_blocked {
+.service-row.is-probe_blocked,
+.service-row.is-check_failed {
   border-color: #e7c27a;
   color: var(--amber);
   background: var(--amber-bg);

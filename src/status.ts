@@ -25,6 +25,19 @@ export const CHECK_REQUEST_HEADERS = {
   accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
   "user-agent": "ICSE-Status/0.1 (+https://status.securityexcellence.net)"
 };
+/**
+ * Major Slack for the ICSE site, and for a Shopify incident that is actually
+ * affecting that site, is sent only after this many consecutive scheduled
+ * failures. The cron is every 15 minutes, so the tries are already spaced
+ * apart. The count lives on each service in the status:latest snapshot.
+ * In-run retries are not used: a blip that lasts a few minutes would still
+ * fail several quick retries inside one invocation.
+ */
+export const MAJOR_ALERT_STREAK = 3;
+export const SHOPIFY_STATUS_SERVICE_ID = "shopify-status";
+export const CHECK_FAILED_ERROR = "Check failed";
+const ICSE_SITE_HOST = "securityexcellence.net";
+const SHOPIFY_STATUS_HOSTS = new Set(["shopifystatus.com", "www.shopifystatus.com"]);
 
 type FetchFunction = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -158,6 +171,10 @@ export async function checkService(
       checkedAt
     };
   } catch (error) {
+    if (isShopifyStatusService(service)) {
+      return checkFailedResult(service, null, Date.now() - startedAt, checkedAt);
+    }
+
     return {
       ...service,
       status: "outage",
@@ -268,6 +285,10 @@ async function checkStatusPage(
       ...(isHealthy ? {} : { error: `Status page indicator: ${indicator ?? "unknown"}` })
     };
   } catch {
+    if (isShopifyStatusService(service)) {
+      return checkFailedResult(service, response.status, latencyMs, checkedAt);
+    }
+
     return {
       ...service,
       status: "outage",
@@ -325,11 +346,12 @@ export async function runChecks(
   options: RunChecksOptions
 ): Promise<StatusSnapshot> {
   const startedAt = Date.now();
-  const results = await mapWithConcurrency(
+  const checked = await mapWithConcurrency(
     catalog.services,
     options.concurrency ?? DEFAULT_CONCURRENCY,
     (service) => checkService(service, options.fetcher)
   );
+  const results = applyShopifyIncidentPolicy(checked);
   const finishedAt = new Date();
   const summary = buildSummary(results);
   const lastRun: LastRunMetadata = {
@@ -360,7 +382,11 @@ export async function runChecksAndPersist(
   options: RunChecksOptions
 ): Promise<StatusSnapshot> {
   const previousSnapshot = await readJson<StatusSnapshot>(kv, LATEST_STATUS_KEY);
-  const snapshot = await runChecks(catalog, options);
+  const checked = await runChecks(catalog, options);
+  const snapshot: StatusSnapshot = {
+    ...checked,
+    services: applyMajorAlertStreaks(checked.services, previousSnapshot)
+  };
   const previousHistory = await getHistory(kv);
   const events = deriveStatusEvents(previousSnapshot, snapshot);
   const nextHistory = trimHistory([...events, ...previousHistory]);
@@ -386,15 +412,16 @@ async function notifySlackOfOutages(
   }
 
   const previousById = new Map(
-    previousSnapshot?.services.map((service) => [service.id, service.status] as const) ?? []
+    previousSnapshot?.services.map((service) => [service.id, service] as const) ?? []
   );
   const lines = snapshot.services.flatMap((service) => {
-    if (service.status !== "outage" || previousById.get(service.id) === "outage") {
+    const label = slackImpactLabel(service);
+    if (!label) {
       return [];
     }
 
-    const label = slackImpactLabel(service);
-    if (!label) {
+    const previous = previousById.get(service.id);
+    if (!shouldPostSlack(service, previous, label)) {
       return [];
     }
 
@@ -638,6 +665,10 @@ function httpFailureResult(
     };
   }
 
+  if (isShopifyStatusService(service)) {
+    return checkFailedResult(service, statusCode, latencyMs, checkedAt);
+  }
+
   return {
     ...service,
     status: "outage",
@@ -672,7 +703,11 @@ function providerIncidentSeverity(
 }
 
 function isMajorCustomerOutage(result: ServiceCheckResult): boolean {
-  if (result.severity === "minor" || result.severity === "probe_blocked") {
+  if (
+    result.severity === "minor" ||
+    result.severity === "probe_blocked" ||
+    result.severity === "check_failed"
+  ) {
     return false;
   }
 
@@ -684,8 +719,13 @@ function isMajorCustomerOutage(result: ServiceCheckResult): boolean {
 }
 
 function slackImpactLabel(service: ServiceCheckResult): "Minor" | "Major" | null {
+  if (service.notifySlack === false) {
+    return null;
+  }
+
   if (
     service.severity === "probe_blocked" ||
+    service.severity === "check_failed" ||
     service.status === "degraded" ||
     service.statusCode === 403 ||
     service.statusCode === 429
@@ -702,6 +742,140 @@ function slackImpactLabel(service: ServiceCheckResult): "Minor" | "Major" | null
   }
 
   return null;
+}
+
+function checkFailedResult(
+  service: ServiceDefinition,
+  statusCode: number | null,
+  latencyMs: number,
+  checkedAt: string
+): ServiceCheckResult {
+  return {
+    ...service,
+    status: "degraded",
+    severity: "check_failed",
+    latencyMs,
+    statusCode,
+    checkedAt,
+    error: CHECK_FAILED_ERROR
+  };
+}
+
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return null;
+  }
+}
+
+function isShopifyStatusService(service: { id: string; url: string }): boolean {
+  if (service.id === SHOPIFY_STATUS_SERVICE_ID) {
+    return true;
+  }
+
+  const hostname = hostnameOf(service.url);
+  return hostname !== null && SHOPIFY_STATUS_HOSTS.has(hostname);
+}
+
+function isIcseCustomerPage(service: { url: string; checkType?: ServiceDefinition["checkType"] }): boolean {
+  if (service.checkType && service.checkType !== "http") {
+    return false;
+  }
+
+  const hostname = hostnameOf(service.url);
+  return hostname === ICSE_SITE_HOST || (hostname?.endsWith(`.${ICSE_SITE_HOST}`) ?? false);
+}
+
+function requiresMajorConfirmation(service: { id: string; url: string; checkType?: ServiceDefinition["checkType"] }): boolean {
+  return isIcseCustomerPage(service) || isShopifyStatusService(service);
+}
+
+/**
+ * A customer page is affected when our own probe saw a 5xx, a timeout, or a
+ * network error. Other 4xx responses and probe blocks do not count.
+ */
+function isCustomerPageHardFailure(result: ServiceCheckResult): boolean {
+  if (!isIcseCustomerPage(result)) {
+    return false;
+  }
+
+  if (typeof result.statusCode === "number" && result.statusCode >= 500 && result.statusCode <= 599) {
+    return true;
+  }
+
+  return result.statusCode === null && result.status === "outage";
+}
+
+function applyShopifyIncidentPolicy(results: ServiceCheckResult[]): ServiceCheckResult[] {
+  const siteAffected = results.some((result) => isCustomerPageHardFailure(result));
+
+  return results.map((result) => {
+    if (!isShopifyStatusService(result) || result.severity !== "major") {
+      return result;
+    }
+
+    if (siteAffected) {
+      return result;
+    }
+
+    return {
+      ...result,
+      status: "outage",
+      severity: "minor",
+      notifySlack: false
+    };
+  });
+}
+
+function previousConfirmedStreak(previous: ServiceCheckResult | undefined): number {
+  if (!previous || previous.severity !== "major" || previous.status !== "outage") {
+    return 0;
+  }
+
+  if (typeof previous.consecutiveMajorFailures === "number") {
+    return previous.consecutiveMajorFailures;
+  }
+
+  // Snapshots from before streak tracking already paged an in-progress major.
+  return MAJOR_ALERT_STREAK;
+}
+
+function applyMajorAlertStreaks(
+  results: ServiceCheckResult[],
+  previousSnapshot: StatusSnapshot | null
+): ServiceCheckResult[] {
+  const previousById = new Map(
+    previousSnapshot?.services.map((service) => [service.id, service] as const) ?? []
+  );
+
+  return results.map((result) => {
+    if (!requiresMajorConfirmation(result)) {
+      return result;
+    }
+
+    if (result.severity !== "major" || result.status !== "outage") {
+      return { ...result, consecutiveMajorFailures: 0 };
+    }
+
+    return {
+      ...result,
+      consecutiveMajorFailures: previousConfirmedStreak(previousById.get(result.id)) + 1
+    };
+  });
+}
+
+function shouldPostSlack(
+  service: ServiceCheckResult,
+  previous: ServiceCheckResult | undefined,
+  label: "Minor" | "Major"
+): boolean {
+  if (requiresMajorConfirmation(service) && label === "Major") {
+    const streak = service.consecutiveMajorFailures ?? 0;
+    return streak >= MAJOR_ALERT_STREAK && previousConfirmedStreak(previous) < MAJOR_ALERT_STREAK;
+  }
+
+  return previous?.status !== "outage";
 }
 
 function describeFetchError(error: unknown): string {

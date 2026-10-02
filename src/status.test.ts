@@ -3,10 +3,13 @@ import {
   aggregateStatus,
   buildSummary,
   buildUnknownSnapshot,
+  CHECK_FAILED_ERROR,
   CHECK_REQUEST_HEADERS,
   checkService,
   deriveStatusEvents,
+  MAJOR_ALERT_STREAK,
   parseServicesConfig,
+  runChecks,
   runChecksAndPersist,
   trimHistory
 } from "./status";
@@ -300,6 +303,85 @@ describe("checkService", () => {
       error: "Arlo status page reports an incident or has an unrecognized status"
     });
   });
+
+  it("treats a Shopify status fetch timeout or network error as a check failure", async () => {
+    const fetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("The operation was aborted", "AbortError"))
+      .mockRejectedValueOnce(new Error("connection refused"));
+
+    await expect(checkService(shopifyService, fetcher)).resolves.toMatchObject({
+      status: "degraded",
+      severity: "check_failed",
+      statusCode: null,
+      error: CHECK_FAILED_ERROR
+    });
+    await expect(checkService(shopifyService, fetcher)).resolves.toMatchObject({
+      status: "degraded",
+      severity: "check_failed",
+      statusCode: null,
+      error: CHECK_FAILED_ERROR
+    });
+  });
+
+  it("treats a non-probe HTTP failure or unreadable Shopify body as a check failure", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("gateway timeout", { status: 504 }))
+      .mockResolvedValueOnce(new Response("missing", { status: 404 }))
+      .mockResolvedValueOnce(new Response("not-json", { status: 200 }));
+
+    await expect(checkService(shopifyService, fetcher)).resolves.toMatchObject({
+      status: "degraded",
+      severity: "check_failed",
+      statusCode: 504,
+      error: CHECK_FAILED_ERROR
+    });
+    await expect(checkService(shopifyService, fetcher)).resolves.toMatchObject({
+      status: "degraded",
+      severity: "check_failed",
+      statusCode: 404,
+      error: CHECK_FAILED_ERROR
+    });
+    await expect(checkService(shopifyService, fetcher)).resolves.toMatchObject({
+      status: "degraded",
+      severity: "check_failed",
+      statusCode: 200,
+      error: CHECK_FAILED_ERROR
+    });
+  });
+
+  it("keeps Shopify HTTP 403 and 429 as probe blocks", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: { indicator: "major" }
+      }), { status: 429 }))
+      .mockResolvedValueOnce(new Response("forbidden", { status: 403 }));
+
+    await expect(checkService(shopifyService, fetcher)).resolves.toMatchObject({
+      status: "degraded",
+      severity: "probe_blocked",
+      statusCode: 429,
+      error: "Probe blocked (HTTP 429)"
+    });
+    await expect(checkService(shopifyService, fetcher)).resolves.toMatchObject({
+      status: "degraded",
+      severity: "probe_blocked",
+      statusCode: 403,
+      error: "Probe blocked (HTTP 403)"
+    });
+  });
+
+  it("still treats a Cloudflare status fetch timeout as a major outage", async () => {
+    const fetcher = vi.fn().mockRejectedValue(new DOMException("The operation was aborted", "AbortError"));
+
+    await expect(checkService(cloudflareService, fetcher)).resolves.toMatchObject({
+      status: "outage",
+      severity: "major",
+      error: "Request timed out"
+    });
+  });
 });
 
 describe("status snapshots", () => {
@@ -322,6 +404,14 @@ describe("status snapshots", () => {
     expect(aggregateStatus([
       result("a", "outage", "major"),
       result("b", "degraded", "probe_blocked")
+    ])).toBe("degraded");
+    expect(aggregateStatus([
+      result("a", "operational"),
+      result("b", "degraded", "check_failed")
+    ])).toBe("degraded");
+    expect(aggregateStatus([
+      result("a", "degraded", "check_failed"),
+      result("b", "degraded", "check_failed")
     ])).toBe("degraded");
   });
 
@@ -504,15 +594,21 @@ describe("slack alerts", () => {
     expect(slackFetcher).not.toHaveBeenCalled();
   });
 
-  it("Slacks Major when a service transitions to HTTP 503", async () => {
+  it("Slacks Major on the first HTTP 503 for a host outside the ICSE site", async () => {
     const slackFetcher = slackOk();
     const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+    const otherHost: ServiceDefinition = {
+      ...httpService,
+      id: "example",
+      name: "Example",
+      url: "https://example.com/"
+    };
 
-    await persistWithSlack([httpService], fetcher, slackFetcher);
+    await persistWithSlack([otherHost], fetcher, slackFetcher);
 
     expect(slackFetcher).toHaveBeenCalledTimes(1);
     const text = slackText(slackFetcher);
-    expect(text).toContain("• Major outage: Site — HTTP 503 (https://securityexcellence.net/)");
+    expect(text).toContain("• Major outage: Example — HTTP 503 (https://example.com/)");
     expect(text).not.toContain("Minor");
     expect(text).not.toContain("Probe blocked");
   });
@@ -533,11 +629,17 @@ describe("slack alerts", () => {
     expect(text).not.toContain("Major");
   });
 
-  it("does not repeat a Major Slack alert while the outage continues", async () => {
+  it("does not repeat a Major Slack alert while a non-ICSE outage continues", async () => {
     const kv = new MemoryKv();
     const slackFetcher = slackOk();
     const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
-    const catalog: ServiceCatalog = { services: [httpService], issues: [] };
+    const otherHost: ServiceDefinition = {
+      ...httpService,
+      id: "example",
+      name: "Example",
+      url: "https://example.com/"
+    };
+    const catalog: ServiceCatalog = { services: [otherHost], issues: [] };
 
     await runChecksAndPersist(kv as unknown as KVNamespace, catalog, {
       fetcher,
@@ -611,9 +713,9 @@ function slackText(slackFetcher: ReturnType<typeof vi.fn>): string {
 async function persistWithSlack(
   services: ServiceDefinition[],
   fetcher: ReturnType<typeof vi.fn>,
-  slackFetcher: ReturnType<typeof vi.fn>
+  slackFetcher: ReturnType<typeof vi.fn>,
+  kv: MemoryKv = new MemoryKv()
 ) {
-  const kv = new MemoryKv();
   const catalog: ServiceCatalog = { services, issues: [] };
   const snapshot = await runChecksAndPersist(kv as unknown as KVNamespace, catalog, {
     fetcher: fetcher as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
@@ -638,4 +740,351 @@ class MemoryKv {
   async put(key: string, value: string): Promise<void> {
     this.values.set(key, value);
   }
+}
+
+describe("Shopify alert severity", () => {
+  it("does not Slack when the Shopify status fetch fails, including repeated timeouts", async () => {
+    const kv = new MemoryKv();
+    const slackFetcher = slackOk();
+    const fetcher = vi.fn().mockRejectedValue(new DOMException("The operation was aborted", "AbortError"));
+
+    for (let attempt = 0; attempt < MAJOR_ALERT_STREAK; attempt += 1) {
+      const { snapshot } = await persistWithSlack([shopifyService], fetcher, slackFetcher, kv);
+      expect(snapshot.services[0]).toMatchObject({
+        status: "degraded",
+        severity: "check_failed",
+        error: CHECK_FAILED_ERROR,
+        consecutiveMajorFailures: 0
+      });
+      expect(snapshot.overall).toBe("degraded");
+    }
+
+    expect(slackFetcher).not.toHaveBeenCalled();
+  });
+
+  it("shows a Shopify major incident without Slack when the ICSE site is up", async () => {
+    const slackFetcher = slackOk();
+    const fetcher = routedFetcher({
+      site: () => new Response(null, { status: 200 }),
+      shopify: () => shopifyFeed("major")
+    });
+
+    const { snapshot } = await persistWithSlack([httpService, shopifyService], fetcher, slackFetcher);
+    const shopify = snapshot.services.find((service) => service.id === "shopify-status");
+
+    expect(shopify).toMatchObject({
+      status: "outage",
+      severity: "minor",
+      notifySlack: false,
+      error: "Status page indicator: major",
+      consecutiveMajorFailures: 0
+    });
+    expect(snapshot.overall).toBe("degraded");
+    expect(slackFetcher).not.toHaveBeenCalled();
+  });
+
+  it("shows a Shopify critical incident without Slack when the site failure is not a hard probe error", async () => {
+    const slackFetcher = slackOk();
+    const fetcher = routedFetcher({
+      site: () => new Response(null, { status: 404 }),
+      shopify: () => shopifyFeed("critical")
+    });
+
+    const { snapshot } = await persistWithSlack([httpService, shopifyService], fetcher, slackFetcher);
+    const site = snapshot.services.find((service) => service.id === "site");
+    const shopify = snapshot.services.find((service) => service.id === "shopify-status");
+
+    expect(site).toMatchObject({ status: "outage", severity: "major", statusCode: 404 });
+    expect(shopify).toMatchObject({
+      severity: "minor",
+      notifySlack: false,
+      error: "Status page indicator: critical"
+    });
+    expect(slackFetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps Shopify major when an ICSE customer page returns 5xx, times out, or fails the network", async () => {
+    const catalog: ServiceCatalog = {
+      services: [httpService, masterclassService, shopifyService],
+      issues: []
+    };
+
+    const fromStatus = await runChecks(catalog, {
+      trigger: "scheduled",
+      fetcher: routedFetcher({
+        site: () => new Response(null, { status: 503 }),
+        masterclass: () => new Response(null, { status: 200 }),
+        shopify: () => shopifyFeed("major")
+      })
+    });
+    expect(serviceById(fromStatus.services, "shopify-status")).toMatchObject({
+      status: "outage",
+      severity: "major"
+    });
+
+    const fromTimeout = await runChecks(catalog, {
+      trigger: "scheduled",
+      fetcher: routedFetcher({
+        site: () => {
+          throw new DOMException("The operation was aborted", "AbortError");
+        },
+        masterclass: () => new Response(null, { status: 200 }),
+        shopify: () => shopifyFeed("critical")
+      })
+    });
+    expect(serviceById(fromTimeout.services, "shopify-status").severity).toBe("major");
+
+    const fromNetwork = await runChecks({
+      services: [masterclassService, shopifyService],
+      issues: []
+    }, {
+      trigger: "scheduled",
+      fetcher: routedFetcher({
+        masterclass: () => {
+          throw new Error("connection refused");
+        },
+        shopify: () => shopifyFeed("major")
+      })
+    });
+    expect(serviceById(fromNetwork.services, "shopify-status").severity).toBe("major");
+    expect(serviceById(fromNetwork.services, masterclassService.id)).toMatchObject({
+      status: "outage",
+      severity: "major",
+      error: "connection refused"
+    });
+  });
+
+  it("does not treat an ICSE probe block as Shopify site impact", async () => {
+    const slackFetcher = slackOk();
+    const fetcher = routedFetcher({
+      site: () => new Response("challenge", { status: 429 }),
+      shopify: () => shopifyFeed("major")
+    });
+
+    const { snapshot } = await persistWithSlack([httpService, shopifyService], fetcher, slackFetcher);
+
+    expect(serviceById(snapshot.services, "site")).toMatchObject({
+      status: "degraded",
+      severity: "probe_blocked"
+    });
+    expect(serviceById(snapshot.services, "shopify-status")).toMatchObject({
+      severity: "minor",
+      notifySlack: false
+    });
+    expect(slackFetcher).not.toHaveBeenCalled();
+  });
+
+  it("still Slacks Minor for a Shopify minor incident", async () => {
+    const slackFetcher = slackOk();
+    const fetcher = routedFetcher({
+      site: () => new Response(null, { status: 200 }),
+      shopify: () => shopifyFeed("minor")
+    });
+
+    const { snapshot } = await persistWithSlack([httpService, shopifyService], fetcher, slackFetcher);
+    const text = slackText(slackFetcher);
+
+    expect(serviceById(snapshot.services, "shopify-status")).toMatchObject({
+      status: "outage",
+      severity: "minor"
+    });
+    expect(serviceById(snapshot.services, "shopify-status").notifySlack).toBeUndefined();
+    expect(text).toContain("• Minor outage: Shopify Platform — Status page indicator: minor");
+    expect(text).not.toContain("Major");
+  });
+
+  it("Slacks Major for Shopify only after the ICSE site stays affected for 3 runs", async () => {
+    const kv = new MemoryKv();
+    const slackFetcher = slackOk();
+    const fetcher = routedFetcher({
+      site: () => new Response(null, { status: 504 }),
+      shopify: () => shopifyFeed("major")
+    });
+
+    const first = await persistWithSlack([httpService, shopifyService], fetcher, slackFetcher, kv);
+    expect(serviceById(first.snapshot.services, "site").consecutiveMajorFailures).toBe(1);
+    expect(serviceById(first.snapshot.services, "shopify-status")).toMatchObject({
+      severity: "major",
+      consecutiveMajorFailures: 1
+    });
+    expect(slackFetcher).not.toHaveBeenCalled();
+
+    await persistWithSlack([httpService, shopifyService], fetcher, slackFetcher, kv);
+    expect(slackFetcher).not.toHaveBeenCalled();
+
+    await persistWithSlack([httpService, shopifyService], fetcher, slackFetcher, kv);
+    const text = slackText(slackFetcher);
+    expect(text).toContain("• Major outage: Site — HTTP 504 (https://securityexcellence.net/)");
+    expect(text).toContain("• Major outage: Shopify Platform — Status page indicator: major");
+    expect(text).not.toContain("Minor");
+
+    await persistWithSlack([httpService, shopifyService], fetcher, slackFetcher, kv);
+    expect(slackFetcher).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ICSE site Major confirmation", () => {
+  it("requires three consecutive scheduled failures before a Major Slack", async () => {
+    expect(MAJOR_ALERT_STREAK).toBe(3);
+    const kv = new MemoryKv();
+    const slackFetcher = slackOk();
+    const fetcher = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("The operation was aborted", "AbortError"))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response(null, { status: 504 }));
+
+    const first = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(first.snapshot.services[0]).toMatchObject({
+      status: "outage",
+      severity: "major",
+      consecutiveMajorFailures: 1,
+      error: "Request timed out"
+    });
+    expect(first.snapshot.overall).toBe("outage");
+    expect(slackFetcher).not.toHaveBeenCalled();
+
+    const second = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(second.snapshot.services[0]).toMatchObject({
+      consecutiveMajorFailures: 2,
+      error: "HTTP 503"
+    });
+    expect(slackFetcher).not.toHaveBeenCalled();
+
+    const third = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(third.snapshot.services[0].consecutiveMajorFailures).toBe(3);
+    const text = slackText(slackFetcher);
+    expect(text).toContain("• Major outage: Site — HTTP 504 (https://securityexcellence.net/)");
+    expect(text).not.toContain("Minor");
+
+    const fourth = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(fourth.snapshot.services[0].consecutiveMajorFailures).toBe(4);
+    expect(slackFetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not Slack Major for a one-off 504 that recovers on the next run", async () => {
+    const kv = new MemoryKv();
+    const slackFetcher = slackOk();
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 504 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 504 }));
+
+    const failed = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(failed.snapshot.services[0]).toMatchObject({
+      status: "outage",
+      severity: "major",
+      consecutiveMajorFailures: 1
+    });
+
+    const recovered = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(recovered.snapshot.services[0]).toMatchObject({
+      status: "operational",
+      consecutiveMajorFailures: 0
+    });
+
+    const failedAgain = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(failedAgain.snapshot.services[0].consecutiveMajorFailures).toBe(1);
+    expect(slackFetcher).not.toHaveBeenCalled();
+  });
+
+  it("resets the Major streak on a probe block and still does not Slack 403 or 429", async () => {
+    const kv = new MemoryKv();
+    const slackFetcher = slackOk();
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response("forbidden", { status: 403 }))
+      .mockResolvedValueOnce(new Response("challenge", { status: 429 }));
+
+    await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    const second = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(second.snapshot.services[0].consecutiveMajorFailures).toBe(2);
+
+    const blocked = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(blocked.snapshot.services[0]).toMatchObject({
+      status: "degraded",
+      severity: "probe_blocked",
+      error: "Probe blocked (HTTP 403)",
+      consecutiveMajorFailures: 0
+    });
+
+    const challenged = await persistWithSlack([httpService], fetcher, slackFetcher, kv);
+    expect(challenged.snapshot.services[0]).toMatchObject({
+      severity: "probe_blocked",
+      error: "Probe blocked (HTTP 429)"
+    });
+    expect(slackFetcher).not.toHaveBeenCalled();
+  });
+
+  it("still Slacks Major on the first Arlo or Cloudflare incident", async () => {
+    const arloSlack = slackOk();
+    const arloFetcher = vi.fn().mockResolvedValue(new Response(
+      "Partial outage investigating Past Incidents",
+      { status: 200 }
+    ));
+    await persistWithSlack([arloService], arloFetcher, arloSlack);
+    expect(slackText(arloSlack)).toContain("• Major outage: Arlo Platform");
+
+    const cloudflareSlack = slackOk();
+    const cloudflareFetcher = vi.fn().mockResolvedValue(shopifyFeed("critical"));
+    await persistWithSlack([cloudflareService], cloudflareFetcher, cloudflareSlack);
+    const text = slackText(cloudflareSlack);
+    expect(text).toContain("• Major outage: Cloudflare Platform — Status page indicator: critical");
+    expect(text).not.toContain("Shopify");
+  });
+});
+
+const masterclassService: ServiceDefinition = {
+  id: "securitymasterclasses-securityexcellence-net",
+  name: "Security Masterclasses",
+  group: "Websites",
+  url: "https://securitymasterclasses.securityexcellence.net/"
+};
+
+const cloudflareService: ServiceDefinition = {
+  id: "cloudflare-status",
+  name: "Cloudflare Platform",
+  group: "Platform Dependencies",
+  url: "https://www.cloudflarestatus.com",
+  checkType: "statusPage"
+};
+
+const shopifyService: ServiceDefinition = statusPageService;
+
+function shopifyFeed(indicator: string): Response {
+  return new Response(JSON.stringify({
+    status: { indicator },
+    components: [{ status: indicator === "minor" ? "degraded_performance" : "major_outage" }]
+  }), { status: 200 });
+}
+
+function serviceById(services: ServiceCheckResult[], id: string): ServiceCheckResult {
+  const service = services.find((item) => item.id === id);
+  if (!service) {
+    throw new Error(`missing service ${id}`);
+  }
+  return service;
+}
+
+function routedFetcher(handlers: {
+  site?: () => Response;
+  masterclass?: () => Response;
+  shopify?: () => Response;
+}) {
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("shopifystatus.com")) {
+      return Promise.resolve(handlers.shopify?.() ?? new Response(null, { status: 500 }));
+    }
+    if (url.includes("securitymasterclasses.")) {
+      return Promise.resolve(handlers.masterclass?.() ?? new Response(null, { status: 500 }));
+    }
+    if (url.includes("securityexcellence.net")) {
+      return Promise.resolve(handlers.site?.() ?? new Response(null, { status: 500 }));
+    }
+    return Promise.reject(new Error(`unexpected url ${url}`));
+  });
 }
