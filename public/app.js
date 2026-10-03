@@ -16,7 +16,7 @@ const STATUS_META = {
   },
   degraded: {
     label: "Degraded",
-    detail: "Some monitored services are check-blocked, reporting a minor issue, or only partly failing."
+    detail: "Some monitored services are check-blocked, have a failed status check, are reporting a minor issue, or are only partly failing."
   },
   outage: {
     label: "Outage",
@@ -30,6 +30,7 @@ const STATUS_META = {
 
 const SEVERITY_META = {
   probe_blocked: { label: "Check blocked" },
+  check_failed: { label: "Check failed" },
   minor: { label: "Minor incident" },
   major: { label: "Major incident" }
 };

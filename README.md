@@ -43,9 +43,9 @@ npx wrangler secret put SLACK_WEBHOOK_URL
 ```
 
 The webhook URL is never stored in the repository. Alerts are sent only when a
-service transitions into a customer-facing outage. Repeated scheduled checks do
-not resend the same alert. Slack failures are logged and do not prevent the
-status snapshot from being stored.
+service transitions into a customer-facing outage, with two extra gates below.
+Repeated scheduled checks do not resend the same alert. Slack failures are
+logged and do not prevent the status snapshot from being stored.
 
 Severity sent to Slack:
 
@@ -55,6 +55,32 @@ Severity sent to Slack:
 - `Minor` for Statuspage indicator `minor` or `maintenance`. Minor stays Minor.
 - No Slack message for HTTP `403` or `429`. Those are probe blocks, not customer
   outages, and the page shows them as degraded / check blocked.
+- No Slack message when the Shopify status fetch itself fails. The page shows
+  that row as degraded / check failed.
+- Shopify's own major or critical incident is `Major` only when an ICSE
+  customer page is also failing. Otherwise the page shows it as a minor
+  incident and Slack is not posted.
+
+Major confirmation for the ICSE site:
+
+The scheduled check runs every 15 minutes. A one-off `504` or timeout on
+`securityexcellence.net` (or another page on that host) must not page Slack.
+The Worker stores `consecutiveMajorFailures` on each ICSE customer page, and
+on Shopify, inside the existing `status:latest` snapshot. Slack `Major` for
+those services is posted only when that count reaches 3. A success, a probe
+block, a minor result, or a Shopify check failure resets the count. The same
+streak gates a Shopify `Major`, so a provider incident pages only after the
+ICSE site has been affected for 3 consecutive runs.
+
+In-run retries were not used. Several quick retries inside one cron run would
+still fail together when a blip lasts a few minutes, which is what happened
+with the 1 Oct `504`. The cron already spaces the tries 15 minutes apart, and
+the Worker does not sleep between them.
+
+Customer pages are HTTP checks whose host is `securityexcellence.net` or a
+subdomain of it. Arlo, Cloudflare, LearnWorlds, and any other host still post
+`Major` on the first transition. That keeps the 26 Sep severity map for
+everything except Shopify and this ICSE-site confirmation.
 
 ## Configure Services
 
@@ -90,9 +116,15 @@ Rules:
 - HTTP `403` and `429` are degraded probe blocks (`severity: probe_blocked`).
   They are not customer outages and do not page Slack.
 - Other HTTP `4xx` (including `404` and `410`), `5xx`, timeouts, and network
-  failures are major outages.
+  failures are major outages. On `securityexcellence.net` and its subdomains,
+  Slack `Major` waits for 3 consecutive scheduled failures.
+- A failed fetch of the Shopify status page is degraded / check failed
+  (`severity: check_failed`). It is not Major and it does not page Slack.
 - Statuspage `minor` and `maintenance` are minor outages. Slack says Minor.
   Statuspage `major` and `critical` are major outages. Slack says Major.
+  Shopify `major` or `critical` is Major only when an ICSE customer page probe
+  in the same run is a `5xx`, timeout, or network error, and only after the
+  3-run confirmation. Otherwise it is shown as minor and Slack is not posted.
 - Overall status is `outage` only when every service is a major outage. Probe
   blocks or minor incidents alone keep the page `degraded`.
 - `timeoutMs` is optional and must be between `1000` and `30000`.

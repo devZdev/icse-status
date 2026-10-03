@@ -4,10 +4,11 @@ export type OverallState = "operational" | "degraded" | "outage" | "unknown";
 
 /**
  * Alert severity for a non-operational check.
- * probe_blocked is not a customer outage and does not page Slack.
- * minor and major are customer-impact severities and do page Slack.
+ * probe_blocked and check_failed are not customer outages and do not page Slack.
+ * minor and major are customer-impact severities and do page Slack, except a
+ * Shopify feed incident that does not affect the ICSE site (shown, not paged).
  */
-export type ServiceSeverity = "probe_blocked" | "minor" | "major";
+export type ServiceSeverity = "probe_blocked" | "check_failed" | "minor" | "major";
 
 export type CheckTrigger = "scheduled";
 
@@ -39,6 +40,17 @@ export interface ServiceCheckResult extends ServiceDefinition {
   statusCode: number | null;
   checkedAt: string | null;
   error?: string;
+  /**
+   * Consecutive scheduled runs that stayed a major-class failure.
+   * Set for ICSE customer pages and Shopify. Major Slack for those waits
+   * until this reaches MAJOR_ALERT_STREAK.
+   */
+  consecutiveMajorFailures?: number;
+  /**
+   * When false, keep this result on the status page and do not post to Slack.
+   * Used when Shopify reports a provider incident that is not affecting the ICSE site.
+   */
+  notifySlack?: false;
 }
 
 export interface StatusSummary {
